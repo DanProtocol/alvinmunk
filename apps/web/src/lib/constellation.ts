@@ -50,6 +50,56 @@ export async function fetchVouchersOf(address: string, max = 14): Promise<Vouche
 }
 
 /**
+ * People `address` has BACKED — the vouches `address` minted that were claimed
+ * (outbound `vouch:claimed` edges), newest first, one per recipient, capped at `max`.
+ * Same event fold as `fetchVouchersOf`, mirrored: the profile page lists whom someone
+ * stands behind, with the same faces-over-numbers treatment as their vouchers.
+ */
+export async function fetchBackedBy(address: string, max = 14): Promise<VoucherStar[]> {
+  const events = await fetchReputationEvents();
+
+  const seen = new Set<string>();
+  const edges: { from: string; vouchId: number }[] = [];
+  for (let i = events.length - 1; i >= 0; i--) {
+    const { topics, data } = events[i];
+    if (topics[0] !== EVENTS.VOUCH || topics[1] !== 'claimed') continue;
+    if (!Array.isArray(data) || data.length < 3) continue;
+    const vouchId = Number(data[0]);
+    const from = String(data[1]);
+    const claimer = String(data[2]);
+    if (from !== address || from === claimer || seen.has(claimer)) continue;
+    seen.add(claimer);
+    edges.push({ from: claimer, vouchId });
+    if (edges.length >= max) break;
+  }
+
+  return Promise.all(
+    edges.map(async (e): Promise<VoucherStar> => {
+      const v = await getVouch(e.vouchId).catch(() => null);
+      return { from: e.from, vouchId: e.vouchId, note: v?.note ?? '', created: v?.created ?? 0 };
+    }),
+  );
+}
+
+/**
+ * People `viewer` and `address` BOTH have a claimed vouch edge with (the intersection of
+ * their undirected neighbour sets, as `suggestPeople` treats edges). Pure: no I/O — feed
+ * it the full event list from `fetchReputationEvents()`. Deterministic: sorted by
+ * address, so a re-render can never reshuffle the row. `viewer` and `address` themselves
+ * are never in the result.
+ */
+export function mutualNeighbours(viewer: string, address: string, events: ChainEvent[]): string[] {
+  if (!viewer || !address || viewer === address) return [];
+  const a = foldVouchEdges(events, viewer);
+  const b = foldVouchEdges(events, address);
+  const neighboursOfViewer = new Set([...a.vouchedBy, ...a.vouchedFor]);
+  const neighboursOfSubject = new Set([...b.vouchedBy, ...b.vouchedFor]);
+  neighboursOfViewer.delete(address);
+  neighboursOfSubject.delete(viewer);
+  return [...neighboursOfViewer].filter((n) => neighboursOfSubject.has(n)).sort();
+}
+
+/**
  * "People who vouched" / "people you backed" for `address`. The durable on-chain counters
  * (`get_counts`) start at the upgrade that added them and can't be backfilled; the recent
  * `vouch:claimed` events only cover the RPC window. Both are lower bounds on the same
