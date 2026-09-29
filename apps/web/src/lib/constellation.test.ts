@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { RepEvent } from './events';
+import type { ReadNetwork } from './read-network';
 
 const { getCountsMock, fetchEventsMock, getVouchMock } = vi.hoisted(() => ({
   getCountsMock: vi.fn(),
@@ -13,6 +14,7 @@ vi.mock('./events', () => ({ fetchReputationEvents: fetchEventsMock }));
 import {
   addrHue,
   fetchBackedBy,
+  fetchVouchersOf,
   getPeopleCounts,
   mutualNeighbours,
   suggestPeople,
@@ -368,5 +370,24 @@ describe('mutualNeighbours', () => {
       claimedEdge(3, THEY, A),
     ];
     expect(mutualNeighbours(ME, THEY, events)).toEqual([A]);
+  });
+});
+
+// ── the ?network= override (#438) ────────────────────────────────────────────
+
+describe('vouch lists on a ?network= override', () => {
+  beforeEach(() => {
+    fetchEventsMock.mockReset();
+    getVouchMock.mockReset().mockResolvedValue({ note: 'hi', created: 5 });
+  });
+
+  it('read the override network for the events and every get_vouch alike', async () => {
+    const net = { network: 'testnet' } as unknown as ReadNetwork;
+    fetchEventsMock.mockResolvedValue([claimed(1, A, ME), claimed(2, ME, B)]);
+    expect((await fetchVouchersOf(ME, 14, net)).map((s) => s.from)).toEqual([A]);
+    expect((await fetchBackedBy(ME, 14, net)).map((s) => s.from)).toEqual([B]);
+    expect(fetchEventsMock).toHaveBeenCalledWith({ net });
+    expect(getVouchMock).toHaveBeenCalledWith(1, net);
+    expect(getVouchMock).toHaveBeenCalledWith(2, net);
   });
 });
